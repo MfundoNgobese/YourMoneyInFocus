@@ -1,0 +1,2 @@
+# YourMoneyInFocus
+Personal finance dashboard
