@@ -7,7 +7,7 @@ import {
 } from "recharts";
 import {
   LayoutDashboard, ListOrdered, PieChart as PieIcon, TrendingUp, Waves,
-  Sparkles, Settings as SettingsIcon, Search, Upload, Download, Printer,
+  Sparkles, Settings as SettingsIcon, Search, Upload, Download,
   ArrowUpRight, ArrowDownRight, Wallet, Coffee, Car, Phone, Fuel,
   ShoppingCart, Clapperboard, Plane, Receipt, Banknote, Calendar, Filter, X, Eye, EyeOff, Tag, PiggyBank
 } from "lucide-react";
@@ -25,20 +25,87 @@ const C = {
 };
 const GRAD = `linear-gradient(135deg, ${C.violet} 0%, ${C.pink} 55%, ${C.amber} 100%)`;
 const CAT_COLOR = {
-  "Food Delivery": C.pink, "Ride-hailing": C.violet, "Groceries": C.green,
-  "Dining": C.orange, "Fuel": C.yellow, "Subscriptions": C.cyan, "Shopping": C.blue,
-  "Travel": C.teal, "Airtime": C.purple, "Cash/ATM": "#94A3B8", "Bank Charges": "#64748B",
-  "Interest": "#F87171", "Other Spend": "#7C8696",
-  "Rates/Levies": "#60A5FA", "Family (Mom)": "#F472B6", "Investments": "#34D399", "Investments (EE/TFSA)": "#34D399",
+  "Food Delivery": "#F472B6", "Ride-hailing": "#8B7CF6", "Groceries": "#34D399",
+  "Dining": "#FB923C", "Fuel": "#FACC15", "Subscriptions": "#22D3EE", "Shopping": "#38BDF8",
+  "Travel": "#2DD4BF", "Airtime": "#A78BFA", "Cash": "#F59E0B", "Bank Charges": "#F87171",
+  "Interest": "#FCA5A5", "Other Spend": "#C084FC",
+  "Rates": "#60A5FA", "Mom": "#F9A8D4", "Investments": "#10B981", "TFSA": "#10B981",
   "Car Repayment": "#FBBF24", "Insurance": "#818CF8",
-  "People": "#FB7185", "Other Payments": "#8B95A5",
-  "Card Purchase": "#38BDF8", "Transfer to Card": "#475569", "Transfer from Card": "#475569", "Other": "#7C8696",
-  "Tolls": "#FBBF24", "Parking": "#22D3EE", "Home Loan": "#F472B6", "Credit Card Payment": "#FB923C",
-  "Digital Payments": "#8B95A5", "Debit Order": "#94A3B8", "Transfer": "#64748B",
+  "People": "#FB7185", "Other Payments": "#E879F9",
+  "Card Purchase": "#38BDF8", "Transfer to Card": "#64748B", "Transfer from Card": "#64748B", "Other": "#A78BFA",
+  "Tolls": "#F59E0B", "Parking": "#4ADE80", "Home Loan": "#EC4899", "Credit Card Payment": "#FB923C",
+  "Digital Payments": "#C084FC", "Debit Order": "#93C5FD", "Transfer": "#64748B",
+  "Salary": "#34D399", "Income": "#4ADE80",
 };
-const catColor = (k) => CAT_COLOR[k] || "#7C8696";
-const TFSA_CAT = "Investments (EE/TFSA)";
+const CAT_PALETTE = ["#8B7CF6", "#F472B6", "#34D399", "#FB923C", "#FACC15", "#22D3EE", "#38BDF8", "#A78BFA", "#2DD4BF", "#FB7185", "#818CF8", "#60A5FA", "#F59E0B", "#4ADE80", "#E879F9", "#F87171", "#10B981", "#C084FC"];
+// Any category without an explicit colour gets a stable vibrant colour (no more grey defaults).
+const catColor = (k) => CAT_COLOR[k] || (() => { const s = String(k || "Other"); let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0; return CAT_PALETTE[h % CAT_PALETTE.length]; })();
+const TFSA_CAT = "TFSA";
 const isEEAccount = (acct) => /ee-?915/i.test(String(acct || ""));
+
+// --- CSV reading (imports the app's own export, and generic bank CSVs) ---
+const normDate = (s) => {
+  s = String(s || "").trim();
+  let m;
+  if ((m = s.match(/^(\d{4})-(\d{2})-(\d{2})/))) return `${m[1]}-${m[2]}-${m[3]}`;
+  if ((m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/))) {
+    let dd = m[1], mm = m[2], yy = m[3]; if (yy.length === 2) yy = "20" + yy;
+    return `${yy}-${String(mm).padStart(2, "0")}-${String(dd).padStart(2, "0")}`;
+  }
+  const MONS = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+  if ((m = s.match(/^(\d{1,2})\s+([A-Za-z]{3})[a-z]*\s+(\d{4})/))) {
+    const mo = MONS[m[2].toLowerCase()]; if (mo) return `${m[3]}-${String(mo).padStart(2, "0")}-${String(+m[1]).padStart(2, "0")}`;
+  }
+  const dt = new Date(s); if (!isNaN(dt)) return dt.toISOString().slice(0, 10);
+  return "";
+};
+const parseCSVRows = (text) => {
+  text = String(text).replace(/^\uFEFF/, "");
+  const rows = []; let row = [], field = "", inQ = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i], nx = text[i + 1];
+    if (inQ) {
+      if (ch === '"' && nx === '"') { field += '"'; i++; }
+      else if (ch === '"') inQ = false;
+      else field += ch;
+    } else {
+      if (ch === '"') inQ = true;
+      else if (ch === ",") { row.push(field); field = ""; }
+      else if (ch === "\r") { /* skip */ }
+      else if (ch === "\n") { row.push(field); rows.push(row); row = []; field = ""; }
+      else field += ch;
+    }
+  }
+  if (field.length || row.length) { row.push(field); rows.push(row); }
+  return rows.filter(r => r.length && r.some(c => String(c).trim() !== ""));
+};
+const csvToTxns = (text) => {
+  const rows = parseCSVRows(text);
+  if (rows.length < 2) return [];
+  const header = rows[0].map(h => String(h).trim().toLowerCase());
+  const idx = (names) => { for (const n of names) { const k = header.findIndex(h => h === n || h.includes(n)); if (k >= 0) return k; } return -1; };
+  const di = idx(["date"]), ai = idx(["account"]), ni = idx(["description", "details", "narrative", "reference", "merchant"]);
+  const ci = idx(["category"]), oi = idx(["money out", "debit", "out (r)", "amount out", "withdrawal"]);
+  const ii = idx(["money in", "credit", "in (r)", "amount in", "deposit"]), ami = idx(["amount", "value"]);
+  const num = (v) => { const x = parseFloat(String(v).replace(/[^\d.\-]/g, "")); return isFinite(x) ? x : 0; };
+  const out = [];
+  for (let r = 1; r < rows.length; r++) {
+    const row = rows[r]; if (!row) continue;
+    const get = (k) => (k >= 0 && k < row.length ? String(row[k]).trim() : "");
+    const d = normDate(get(di)); if (!d) continue;
+    const n = get(ni) || "Transaction";
+    const acctRaw = get(ai);
+    const ee = isEEAccount(acctRaw);
+    const a = ee ? "EE" : (acctRaw.toLowerCase().includes("credit") || acctRaw.toUpperCase() === "CC" ? "CC" : "CHQ");
+    let o = 0, i = 0;
+    if (oi >= 0 || ii >= 0) { o = Math.abs(num(get(oi))); i = Math.abs(num(get(ii))); }
+    else if (ami >= 0) { const v = num(get(ami)); if (v < 0) o = Math.abs(v); else i = v; }
+    if (o === 0 && i === 0) continue;
+    let c = get(ci); if (ee) c = TFSA_CAT; if (!c) c = "Other";
+    out.push({ d, a, t: "", n, o, i, c });
+  }
+  return out;
+};
 
 /* ============================ HELPERS ============================ */
 const mLabel = (m) => {
@@ -71,8 +138,21 @@ const effCategory = (t, ov) => (ov && (ov["id:" + txnId(t)] || ov["desc:" + t.n]
 // income, and only external outflows (purchases, charges, withdrawals, payments) as expense.
 const INTERNAL = new Set([
   "Transfer", "Transfer to Card", "Transfer from Card", "Transfer to Savings", "Transfer from Savings",
-  "Internal Transfer", "Card Payment", "Investments (EE/TFSA)", "Investments"
+  "Internal Transfer", "Card Payment", "TFSA", "Investments"
 ]);
+
+// Categories/labels that aren't a shop or company — kept out of "Top Merchants".
+const NON_MERCHANT_CATS = new Set([
+  "Bank Charges", "Interest", "Digital Payments", "Debit Order", "People",
+  "Rates", "Insurance", "Home Loan", "Credit Card Payment", "Car Repayment",
+  "Cash", "Other Payments", "Mom", "Salary", "Income", "TFSA", "Investments",
+  "Transfer", "Transfer to Card", "Transfer from Card", "Card Payment", "Other Payments"
+]);
+const isRealMerchant = (name, cat) => {
+  if (NON_MERCHANT_CATS.has(cat)) return false;
+  if (!name || name === "—") return false;
+  return !/^(payment|transfer|interest|bank|digital|debit order|eft|deposit|withdrawal|\bfee\b|immediate payment|external payment|banking app|cash )/i.test(name);
+};
 
 const merchantName = (n) => {
   if (!n) return "—";
@@ -89,7 +169,11 @@ const merchantName = (n) => {
   if (/engen/i.test(s)) s = "Engen";
   if (/sasol/i.test(s)) s = "Sasol";
   if (/google/i.test(s)) s = "Google";
-  if (/airtime/i.test(s)) s = "Cell C / Vodacom Airtime";
+  if (/vodacom/i.test(s)) s = "Vodacom";
+  else if (/\bmtn\b/i.test(s)) s = "MTN";
+  else if (/cell ?c/i.test(s)) s = "Cell C";
+  else if (/telkom/i.test(s)) s = "Telkom";
+  else if (/airtime|prepaid mobile/i.test(s)) s = "Airtime";
   return s.length > 26 ? s.slice(0, 26) + "…" : s;
 };
 
@@ -232,7 +316,7 @@ function useModel(txns, overrides={}) {
         if (LIFESTYLE.has(t.c)) (lifeMonth[t.c] = lifeMonth[t.c] || {})[m] = (lifeMonth[t.c]?.[m] || 0) + t.o;
         if (t.a === "CC" && t.o > biggest.o) biggest = t;
         const mn = merchantName(t.n);
-        merch[mn] = (merch[mn] || 0) + t.o;
+        if (isRealMerchant(mn, t.c)) merch[mn] = (merch[mn] || 0) + t.o;
       }
     });
     months.forEach(m => { byMonth[m].savings = byMonth[m].income - byMonth[m].expense; });
@@ -398,12 +482,12 @@ function TopBars({ data, color, fmt = R, h = 260 }) {
 
 function MoneyFlowSankey({ model }) {
   const m = model.totals;
-  const billsCats = ["Rates/Levies", "Family (Mom)", TFSA_CAT, "Debit Order", "Car Repayment", "Insurance", "People", "Home Loan", "Other Payments", "Airtime"];
+  const billsCats = ["Rates", "Mom", TFSA_CAT, "Debit Order", "Car Repayment", "Insurance", "People", "Home Loan", "Other Payments", "Airtime"];
   const bills = billsCats.reduce((a, c) => a + (model.catTot[c] || 0), 0);
   const card = m.cardSpend;
   const otherChq = m.expense - bills - card;
   const save = Math.max(0, m.savings);
-  const nodes = [{ name: "Income" }, { name: "Living & Bills" }, { name: "Card Lifestyle" }, { name: "Other" }, { name: "Saved / Invested" }];
+  const nodes = [{ name: "Income" }, { name: "Living & Bills" }, { name: "Card Lifestyle" }, { name: "Other" }, { name: "Saved & Invested" }];
   const links = [
     { source: 0, target: 1, value: Math.round(bills) },
     { source: 0, target: 2, value: Math.round(card) },
@@ -501,7 +585,7 @@ function Dashboard({ model, month, setMonth, goCat }) {
       <div className="grid" style={{ gridTemplateColumns: narrow ? "1fr 1fr" : "repeat(auto-fit,minmax(190px,1fr))", gap: narrow ? 10 : 14 }}>
         <KPI label="Total Income" value={t.income} accent={C.green} sub="12 months" hideable />
         <KPI label="Total Expenses" value={t.expense} accent={C.rose} sub="true outflows" />
-        <KPI label="Saved / Invested" value={t.savings} accent={C.amber} sub="income − expenses" hideable />
+        <KPI label="Saved & Invested" value={t.savings} accent={C.amber} sub="income − expenses" hideable />
         <KPI label="Savings Rate" value={t.rate} accent={C.violet} money={false} dp={1} sub="% of income" />
       </div>
 
@@ -841,7 +925,7 @@ function ClassifyModal({ txn, currentCat, matchCount, cats, onSave, onClose }) {
   );
 }
 
-function Transactions({ txns, overrides={}, onReclassify, onPrint, presetCat, presetClear }) {
+function Transactions({ txns, overrides={}, onReclassify, presetCat, presetClear }) {
   const [q, setQ] = useState("");
   const [acc, setAcc] = useState("All");
   const [cat, setCat] = useState(presetCat || "All");
@@ -868,10 +952,6 @@ function Transactions({ txns, overrides={}, onReclassify, onPrint, presetCat, pr
   }, [txns, q, acc, cat, sort, overrides]);
   const sums = useMemo(() => rows.reduce((a, t) => ({ o: a.o + t.o, i: a.i + t.i }), { o: 0, i: 0 }), [rows]);
 
-  const printTable = () => {
-    const title = `Transactions${cat!=="All"?" — "+cat:""}${acc!=="All"?" — "+acc:""}${q?` — "${q}"`:""}`;
-    onPrint && onPrint(title, rows.map(t => ({ ...t, c: effCat(t) })));
-  };
   const downloadCSV = () => {
     const esc = v => `"${String(v).replace(/"/g, '""')}"`;
     const head = "Date,Account,Description,Category,Money Out (R),Money In (R)\n";
@@ -910,7 +990,6 @@ function Transactions({ txns, overrides={}, onReclassify, onPrint, presetCat, pr
           <Select value={acc} set={setAcc} opts={["All","CC","CHQ"]} labels={{CC:"Credit Card",CHQ:"Cheque"}} />
           <Select value={cat} set={setCat} opts={cats} />
           {(cat!=="All"&&presetCat)&&<button onClick={()=>{setCat("All");presetClear&&presetClear();}} style={btnGhost}><X size={13}/> Clear</button>}
-          <button onClick={printTable} style={btnGhost}><Printer size={13}/> Print</button>
           <button onClick={downloadCSV} style={btnGhost}><Download size={13}/> CSV</button>
         </div>
         <div style={{ overflowX:"auto" }}>
@@ -967,7 +1046,7 @@ function Select({ value, set, opts, labels = {} }) {
   );
 }
 
-function SettingsPage({ setTxns, status, setStatus, onPrintAll, onExportAll, onClearTags, tagCount = 0 }) {
+function SettingsPage({ setTxns, status, setStatus, onExportAll, onClearTags, tagCount = 0 }) {
   const [pass, setPass] = useState("");
   const [needsPass, setNeedsPass] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -1007,7 +1086,7 @@ function SettingsPage({ setTxns, status, setStatus, onPrintAll, onExportAll, onC
       if (typ === "CHG") return "Bank Charges";
       if (typ === "INT") return "Interest";
       if (["PY", "CV", "PUR"].includes(typ)) return "Card Payment";
-      if (typ === "CA") return "Cash/ATM";
+      if (typ === "CA") return "Cash";
       if (d.includes("uber eats") || d.includes("mr d") || d.includes("mrd food")) return "Food Delivery";
       if (d.includes("uber") || d.includes("bolt")) return "Ride-hailing";
       if (["pick n pay", "pnp", "woolworth", "checker", "spar", "shoprite", "usave", "food lover", "ok mini", "superspar"].some(k => d.includes(k))) return "Groceries";
@@ -1032,12 +1111,12 @@ function SettingsPage({ setTxns, status, setStatus, onPrintAll, onExportAll, onC
     if (/funeral|capfuneral|life insurance|legalwise|insurance|food for life/.test(d)) return "Insurance";
     if (/itransact|investment|ee-?915|tfsa|easy equities/.test(d)) return TFSA_CAT;
     if (d.includes("transfer")) return "Transfer";
-    if (/cashsend|\batm\b|cash withdrawal/.test(d)) return "Cash/ATM";
+    if (/cashsend|\batm\b|cash withdrawal/.test(d)) return "Cash";
     if (/woolworth|pick n pay|\bpnp\b|checkers|\bspar\b|shoprite|usave|food lover/.test(d)) return "Groceries";
     if (/debicheck|debit order/.test(d)) return "Debit Order";
-    if (/rates|levy|municipal/.test(d)) return "Rates/Levies";
+    if (/rates|levy|municipal/.test(d)) return "Rates";
     if (/parking|servest/.test(d)) return "Parking";
-    if (d.includes("mom")) return "Family (Mom)";
+    if (d.includes("mom")) return "Mom";
     if (/payment received|cash deposit|payshap.*received|interest received|\brefund\b|reversal/.test(d)) return "Income";
     if (/payshap|immediate payment|external payment/.test(d)) return "People";
     return "Other";
@@ -1215,7 +1294,7 @@ function SettingsPage({ setTxns, status, setStatus, onPrintAll, onExportAll, onC
 
   // ---- Capitec statement parser (explicit category column + Money In/Out/Fee)
   const CAP_CATS = ["Home Loan Payments", "Digital Subscriptions", "Credit Card Payments", "Other Income", "Cash Deposit", "Funeral Cover", "Life Insurance", "Cash Withdrawal", "Digital Payments", "Uncategorised", "Investments", "Cellphone", "Takeaways", "Transfer", "Parking", "Interest", "Tolls", "Fuel", "Fees"];
-  const CAP_MAP = { "Fees": "Bank Charges", "Cellphone": "Airtime", "Takeaways": "Dining", "Digital Subscriptions": "Subscriptions", "Cash Withdrawal": "Cash/ATM", "Other Income": "Income", "Cash Deposit": "Income", "Interest": "Income", "Home Loan Payments": "Home Loan", "Life Insurance": "Insurance", "Funeral Cover": "Insurance", "Credit Card Payments": "Credit Card Payment", "Uncategorised": "Other", "Investments": TFSA_CAT };
+  const CAP_MAP = { "Fees": "Bank Charges", "Cellphone": "Airtime", "Takeaways": "Dining", "Digital Subscriptions": "Subscriptions", "Cash Withdrawal": "Cash", "Other Income": "Income", "Cash Deposit": "Income", "Interest": "Income", "Home Loan Payments": "Home Loan", "Life Insurance": "Insurance", "Funeral Cover": "Insurance", "Credit Card Payments": "Credit Card Payment", "Uncategorised": "Other", "Investments": TFSA_CAT };
   const parseCapitec = (lines) => {
     const full = lines.join("\n");
     if (!/capitecbank\.co\.za|capitec bank limited|fsp46669/i.test(full)) return null;
@@ -1293,6 +1372,18 @@ function SettingsPage({ setTxns, status, setStatus, onPrintAll, onExportAll, onC
       const ab = await f.arrayBuffer();
       pendingBytes.current = new Uint8Array(ab);
       await tryPdf(null);
+    } else if (f.name.toLowerCase().endsWith(".csv")) {
+      try {
+        const text = await f.text();
+        const mapped = csvToTxns(text);
+        if (!mapped.length) throw new Error("no rows");
+        accum.current = accum.current.concat(mapped);
+        doneCount.current++;
+      } catch (err) {
+        setStatus({ ok: false, msg: `Skipped "${f.name}" — couldn't read the CSV.` });
+      }
+      queue.current.shift();
+      processNext();
     } else {
       try {
         const buf = await f.arrayBuffer();
@@ -1383,8 +1474,8 @@ function SettingsPage({ setTxns, status, setStatus, onPrintAll, onExportAll, onC
           Scanned/image PDFs can't be parsed; password-protected PDFs prompt for a password.
         </p>
         <label style={{ ...btnGhost, display: "inline-flex", padding: "10px 16px", cursor: loading ? "default" : "pointer", opacity: loading ? 0.6 : 1 }}>
-          <Upload size={15} /> {loading ? "Reading…" : "Choose files (.xlsx / .pdf)"}
-          <input type="file" accept=".xlsx,.xls,.pdf" multiple style={{ display: "none" }} onChange={onFiles} disabled={loading} />
+          <Upload size={15} /> {loading ? "Reading…" : "Choose files (.xlsx / .pdf / .csv)"}
+          <input type="file" accept=".xlsx,.xls,.pdf,.csv" multiple style={{ display: "none" }} onChange={onFiles} disabled={loading} />
         </label>
         {needsPass && (
           <div style={{ marginTop: 16, padding: 16, background: "rgba(255,255,255,0.04)", borderRadius: 12, border: `1px solid ${C.line}` }}>
@@ -1407,11 +1498,10 @@ function SettingsPage({ setTxns, status, setStatus, onPrintAll, onExportAll, onC
       <Glass>
         <CardTitle>Export</CardTitle>
         <div className="flex" style={{ gap: 10, flexWrap: "wrap" }}>
-          <button onClick={() => onPrintAll && onPrintAll()} style={btnGhost}><Printer size={14} /> Print / Save as PDF</button>
           <button onClick={() => onExportAll && onExportAll()} style={btnGhost}><Download size={14} /> Download CSV</button>
         </div>
         <p style={{ color: C.faint, fontSize: 12, marginTop: 10 }}>
-          On iPhone the in-app print dialog may not open; use <b style={{ color: C.text }}>Download CSV</b> (it opens the share sheet → Print or Save to Files), or open this dashboard in Safari.
+          Exports all transactions to a CSV file you can re-import here, open in Excel/Sheets, or keep as a backup.
         </p>
         <div style={{ marginTop: 14, paddingTop: 14, borderTop: `1px solid ${C.line}` }}>
           <div className="flex items-center justify-between" style={{ gap: 10, flexWrap: "wrap" }}>
@@ -1433,57 +1523,6 @@ function SettingsPage({ setTxns, status, setStatus, onPrintAll, onExportAll, onC
 }
 
 /* ============================ APP SHELL ============================ */
-const PRINT_CSS = `
-@media print {
-  .screen-only { display: none !important; }
-  .print-root { display: block !important; }
-  html, body { background: #fff !important; }
-  @page { margin: 14mm; }
-}
-.print-root { display: none; }
-`;
-const tdP = { padding: "5px 7px", borderBottom: "1px solid #eee", textAlign: "left", verticalAlign: "top" };
-function PrintTable({ job }) {
-  if (!job) return null;
-  const { title, rows } = job;
-  const sums = rows.reduce((a, t) => ({ o: a.o + t.o, i: a.i + t.i }), { o: 0, i: 0 });
-  const fmt = n => n ? "R" + n.toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "";
-  return (
-    <div style={{ padding: 24, color: "#111", fontFamily: "Arial, Helvetica, sans-serif" }}>
-      <h1 style={{ fontSize: 16, margin: "0 0 4px" }}>{title}</h1>
-      <div style={{ color: "#555", fontSize: 12, marginBottom: 12 }}>{rows.length} transactions</div>
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
-        <thead>
-          <tr>
-            {["Date", "Acct", "Description", "Category", "Out (R)", "In (R)"].map(h => (
-              <th key={h} style={{ padding: "5px 7px", borderBottom: "1px solid #ccc", background: "#f4f4f6", fontSize: 9, textTransform: "uppercase", letterSpacing: 0.4, textAlign: h.includes("(R)") ? "right" : "left" }}>{h}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((t, i) => (
-            <tr key={i}>
-              <td style={tdP}>{t.d}</td>
-              <td style={tdP}>{t.a}</td>
-              <td style={tdP}>{t.n}</td>
-              <td style={tdP}>{t.c}</td>
-              <td style={{ ...tdP, textAlign: "right", whiteSpace: "nowrap" }}>{fmt(t.o)}</td>
-              <td style={{ ...tdP, textAlign: "right", whiteSpace: "nowrap" }}>{fmt(t.i)}</td>
-            </tr>
-          ))}
-        </tbody>
-        <tfoot>
-          <tr>
-            <td colSpan={4} style={{ ...tdP, fontWeight: 700, borderTop: "2px solid #999" }}>Total ({rows.length})</td>
-            <td style={{ ...tdP, textAlign: "right", fontWeight: 700, borderTop: "2px solid #999" }}>{fmt(sums.o)}</td>
-            <td style={{ ...tdP, textAlign: "right", fontWeight: 700, borderTop: "2px solid #999" }}>{fmt(sums.i)}</td>
-          </tr>
-        </tfoot>
-      </table>
-    </div>
-  );
-}
-
 function EmptyState({ onImport }) {
   return (
     <div className="flex flex-col items-center justify-center" style={{ minHeight: "60vh", textAlign: "center", padding: 24 }}>
@@ -1637,7 +1676,7 @@ function TFSAPage({ txns = [], overrides = {} }) {
       <Glass>
         <CardTitle right={<button onClick={resetDetected} style={{ background: "transparent", border: "none", color: C.violet, fontSize: 12, cursor: "pointer", fontWeight: 600 }}>↻ Use detected</button>}>Your figures</CardTitle>
         <p style={{ color: C.faint, fontSize: 11.5, marginBottom: 14 }}>
-          Detected from your <b style={{ color: C.text }}>Investments (EE/TFSA)</b> transactions — any EE-915 account movement, plus iTransact/EasyEquities/TFSA entries{dataMonths ? ` (${R(detectedLifetime)} over ${dataMonths} month${dataMonths === 1 ? "" : "s"})` : " — none yet"}. Adjust any value, including prior years not in your statements.
+          Detected from your <b style={{ color: C.text }}>TFSA</b> transactions — any EE-915 account movement, plus iTransact/EasyEquities/TFSA entries{dataMonths ? ` (${R(detectedLifetime)} over ${dataMonths} month${dataMonths === 1 ? "" : "s"})` : " — none yet"}. Adjust any value, including prior years not in your statements.
         </p>
         <div className="grid" style={{ gridTemplateColumns: narrow ? "1fr 1fr" : "1fr 1fr 1fr", gap: 12 }}>
           <NumField label="Contributed this tax year" value={ytd} onChange={setYtd} />
@@ -1764,8 +1803,6 @@ export default function App() {
   };
   const model = useModel(txns, overrides);
   const narrow = useIsNarrow();
-  const [printJob, setPrintJob] = useState(null);
-  const onPrint = (title, rows) => setPrintJob({ title, rows });
   const onExportAll = () => {
     const esc = v => `"${String(v).replace(/"/g, '""')}"`;
     const head = "Date,Account,Description,Category,Money Out (R),Money In (R)\n";
@@ -1777,14 +1814,6 @@ export default function App() {
     document.body.appendChild(a); a.click();
     setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 1000);
   };
-  useEffect(() => {
-    if (!printJob) return;
-    const id = setTimeout(() => { try { window.print(); } catch (e) {} }, 60);
-    const done = () => setPrintJob(null);
-    window.addEventListener("afterprint", done, { once: true });
-    const fallback = setTimeout(done, 1500);
-    return () => { clearTimeout(id); clearTimeout(fallback); window.removeEventListener("afterprint", done); };
-  }, [printJob]);
 
   const goCat = (k) => { setPresetCat(k); setPage("tx"); };
   const onImport = (e) => {
@@ -1818,17 +1847,13 @@ export default function App() {
   }, [search, txns]);
 
   return (
-    <>
-      <style dangerouslySetInnerHTML={{ __html: PRINT_CSS }} />
-      <div className="print-root"><PrintTable job={printJob} /></div>
-      <div className="screen-only" style={{ display: "flex", minHeight: "100vh", background: `radial-gradient(1200px 600px at 80% -10%, rgba(139,124,246,0.10), transparent), radial-gradient(900px 500px at -10% 110%, rgba(246,177,74,0.07), transparent), ${C.ink}`, color: C.text, fontFamily: "system-ui,-apple-system,Segoe UI,Roboto,sans-serif" }}>
+    <div style={{ display: "flex", minHeight: "100vh", background: `radial-gradient(1200px 600px at 80% -10%, rgba(139,124,246,0.10), transparent), radial-gradient(900px 500px at -10% 110%, rgba(246,177,74,0.07), transparent), ${C.ink}`, color: C.text, fontFamily: "system-ui,-apple-system,Segoe UI,Roboto,sans-serif" }}>
       {/* Sidebar */}
       <aside className="hidden md:flex" style={{ flexDirection: "column", width: 232, padding: 18, borderRight: `1px solid ${C.line}`, position: "sticky", top: 0, height: "100vh" }}>
         <div className="flex items-center" style={{ gap: 10, marginBottom: 26, padding: "4px 6px" }}>
           <div style={{ width: 30, height: 30, borderRadius: 9, background: GRAD }} />
           <div>
-            <div style={{ fontWeight: 800, fontSize: 15, letterSpacing: 0.2 }}>Ledger</div>
-            <div style={{ color: C.faint, fontSize: 10.5 }}>Personal finance</div>
+            <div style={{ fontWeight: 800, fontSize: 14, letterSpacing: 0.2, lineHeight: 1.15 }}>Your Money<br/>in Focus</div>
           </div>
         </div>
         {NAV.map(n => {
@@ -1845,7 +1870,7 @@ export default function App() {
           );
         })}
         <div style={{ marginTop: "auto", padding: 12, borderRadius: 12, background: "rgba(255,255,255,0.03)", border: `1px solid ${C.line}` }}>
-          <div style={{ color: C.faint, fontSize: 11, marginBottom: 6 }}>Saved / Invested</div>
+          <div style={{ color: C.faint, fontSize: 11, marginBottom: 6 }}>Saved & Invested</div>
           <div style={{ fontWeight: 800, fontSize: 18, background: GRAD, WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>{R(model.totals.savings)}</div>
           <div style={{ color: C.faint, fontSize: 10.5, marginTop: 2 }}>{model.totals.rate.toFixed(1)}% savings rate</div>
         </div>
@@ -1895,16 +1920,15 @@ export default function App() {
           ? <EmptyState onImport={() => setPage("settings")} />
           : <>
             {page === "dash" && <Dashboard model={model} goCat={goCat} />}
-            {page === "tx" && <Transactions txns={txns} overrides={overrides} onReclassify={onReclassify} onPrint={onPrint} presetCat={presetCat} presetClear={() => setPresetCat(null)} />}
+            {page === "tx" && <Transactions txns={txns} overrides={overrides} onReclassify={onReclassify} presetCat={presetCat} presetClear={() => setPresetCat(null)} />}
             {page === "cat" && <Categories model={model} goTx={goCat} />}
             {page === "trends" && <Trends model={model} />}
             {page === "flow" && <CashFlow model={model} />}
             {page === "insights" && <Insights model={model} />}
           </>}
         {page === "tfsa" && <TFSAPage txns={txns} overrides={overrides} />}
-        {page === "settings" && <SettingsPage setTxns={t=>{setTxns(t);setPage("dash");}} status={status} setStatus={setStatus} onPrintAll={() => onPrint("All Transactions", txns.map(t => ({ ...t, c: effCategory(t, overrides) })))} onExportAll={onExportAll} onClearTags={clearTags} tagCount={Object.keys(overrides).length} />}
+        {page === "settings" && <SettingsPage setTxns={t=>{setTxns(t);setPage("dash");}} status={status} setStatus={setStatus} onExportAll={onExportAll} onClearTags={clearTags} tagCount={Object.keys(overrides).length} />}
       </main>
     </div>
-    </>
   );
 }
