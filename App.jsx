@@ -42,6 +42,21 @@ const CAT_PALETTE = ["#8B7CF6", "#F472B6", "#34D399", "#FB923C", "#FACC15", "#22
 const catColor = (k) => CAT_COLOR[k] || (() => { const s = String(k || "Other"); let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0; return CAT_PALETTE[h % CAT_PALETTE.length]; })();
 const TFSA_CAT = "TFSA";
 const isEEAccount = (acct) => /ee-?915/i.test(String(acct || ""));
+// A transaction belongs to the TFSA whenever its account OR description carries the EE- marker
+// (e.g. "Ee-915296-tfsa", "ABSA BANK EE-915296-TFSA", "Ee-915295") or an explicit TFSA/EasyEquities cue.
+const isTFSAText = (s) => /\bee-?\d|\btfsa\b|easy ?equities|itransact/i.test(String(s || ""));
+
+// Canonicalise any category label to a single clean acronym. Older builds (and free-text
+// reclassification) produced decorated labels like "Investments (EE/TFSA)", "EE/TFSA",
+// "Investments/TFSA" or "EE-TFSA". Strip brackets, slashes and hyphens and fold every one of
+// those variants down to the single canonical "TFSA" so the TFSA tab populates correctly.
+const normalizeCategory = (cat) => {
+  const raw = String(cat || "").trim();
+  if (!raw) return raw;
+  // Does this label reference the TFSA/EE investment account in any decorated form?
+  if (/tfsa|ee-?\d|ee[\/\-]tfsa|easy ?equities/i.test(raw)) return TFSA_CAT;
+  return raw;
+};
 
 // --- CSV reading (imports the app's own export, and generic bank CSVs) ---
 const normDate = (s) => {
@@ -130,7 +145,14 @@ const LIFESTYLE = new Set(["Food Delivery", "Ride-hailing", "Groceries", "Dining
 const txnId = t => `${t.d}|${t.n}|${t.o}|${t.i}`;
 // Resolve a transaction's effective category given reclassification overrides.
 // Keys are either "id:<txnId>" (single) or "desc:<description>" (cascade to all alike).
-const effCategory = (t, ov) => (ov && (ov["id:" + txnId(t)] || ov["desc:" + t.n])) || t.c;
+const effCategory = (t, ov) => {
+  const override = ov && (ov["id:" + txnId(t)] || ov["desc:" + t.n]);
+  // A manual reclassification always wins, but is still cleaned to the canonical acronym.
+  if (override) return normalizeCategory(override);
+  // Any EE-915 / TFSA account or description is a TFSA contribution, whatever its stored category.
+  if (isEEAccount(t.a) || isTFSAText(t.a) || isTFSAText(t.n)) return TFSA_CAT;
+  return normalizeCategory(t.c);
+};
 
 // One collective wallet: money moving between your own accounts (transfers, card payments,
 // and contributions into your own investment/TFSA account) nets to zero — it is neither
@@ -1265,7 +1287,13 @@ function SettingsPage({ setTxns, status, setStatus, onExportAll, onClearTags, ta
     const txns = [];
     let inTx = false, curDate = null, buf = "";
     const dateRe = /^(\d{1,2})\s+([A-Za-z]{3})\s+(\d{2})\b\s*(.*)$/;
-    const pairRe = /^(.*?)(-?\d[\d ]*[.,]\d{2})\s+(\d[\d ]*[.,]\d{2})\s*$/;
+    // A Standard Bank money value groups thousands with commas only (e.g. 1,203.10); a space is
+    // never inside an amount — it is the gap between the description/reference column and the
+    // Payments/Deposits column. The old pattern allowed spaces inside the number, so a trailing
+    // reference digit run (e.g. the masked "*2772" or "VAS…935") glued onto the amount and
+    // produced absurd totals. Anchor to comma-grouped tokens so only the real amount + balance match.
+    const SB_MONEY = "\\d{1,3}(?:,\\d{3})*\\.\\d{2}";
+    const pairRe = new RegExp("^(.*?)(-?" + SB_MONEY + ")\\s+(" + SB_MONEY + ")\\s*$");
     const tryEmit = () => {
       const m = buf.match(pairRe);
       if (!m || !curDate) return;
@@ -1773,12 +1801,14 @@ export default function App() {
     let alive = true;
     (async () => {
       try {
+        // Heal legacy decorated labels (e.g. "Investments (EE/TFSA)") down to the clean acronym on load.
+        const clean = (o) => { const out = {}; for (const k in o) out[k] = normalizeCategory(o[k]); return out; };
         if (typeof window !== "undefined" && window.storage) {
           const r = await window.storage.get("tagOverrides");
-          if (alive && r && r.value) { const parsed = JSON.parse(r.value); if (parsed && typeof parsed === "object") setOverrides(parsed); }
+          if (alive && r && r.value) { const parsed = JSON.parse(r.value); if (parsed && typeof parsed === "object") setOverrides(clean(parsed)); }
         } else if (typeof window !== "undefined" && window.localStorage) {
           const v = window.localStorage.getItem("tagOverrides");
-          if (alive && v) { const parsed = JSON.parse(v); if (parsed && typeof parsed === "object") setOverrides(parsed); }
+          if (alive && v) { const parsed = JSON.parse(v); if (parsed && typeof parsed === "object") setOverrides(clean(parsed)); }
         }
       } catch (e) { /* no saved tags / storage unavailable */ }
       if (alive) setHydrated(true);
@@ -1796,7 +1826,7 @@ export default function App() {
     })();
   }, [overrides, hydrated]);
   const onReclassify = (t, cat, scope) =>
-    setOverrides(o => ({ ...o, [(scope === "desc" ? "desc:" + t.n : "id:" + txnId(t))]: cat }));
+    setOverrides(o => ({ ...o, [(scope === "desc" ? "desc:" + t.n : "id:" + txnId(t))]: normalizeCategory(cat) }));
   const clearTags = () => {
     setOverrides({});
     (async () => { try { if (typeof window !== "undefined" && window.storage) await window.storage.delete("tagOverrides"); else if (typeof window !== "undefined" && window.localStorage) window.localStorage.removeItem("tagOverrides"); } catch (e) {} })();
